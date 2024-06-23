@@ -19,7 +19,7 @@ using namespace shmsync;
 #define ASSERT_EMPTYSTR(s) ASSERT_EQ(std::string(""), (s))
 
 void* mmap(size_t len) {
-  void* p = ::mmap(0, len, PROT_READ|PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
+  void* p = ::mmap(0, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
   if (p == MAP_FAILED) {
     std::cerr << "mmap()ing " << len << " bytes fo shared memoery failed - " << strerror(errno) << std::endl;
     abort();
