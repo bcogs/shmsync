@@ -10,6 +10,7 @@ To run the unit tests, you'll need Google test.  Here's how to install it on Ubu
 ```apt-get install cmake googletest-dev
 cd /usr/src/googletest
 cmake CMakeLists.txt
-make```
+make
+```
 
 To compile and test shmsync, just type make.  There's no make install, just copy the .h where you need and link with libshmsync.a.
