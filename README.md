@@ -25,12 +25,12 @@ int main() {
     case -1: abort();
     case 0:
       m->Lock();  // you can lock/unlock the mutex explicitly...
-      std::cout << "the parent acquired the lock" << std::endl;
+      std::cout << "the child acquired the lock" << std::endl;
       m->Unlock();
       return 0;
   }
   shmsync::Lock lock(mutex);  // or you can use RTTI to avoid mistakes
-  std::cout << "the child acquired the lock" << std::endl;
+  std::cout << "the parent acquired the lock" << std::endl;
   return 0;
 }
 ```
