@@ -42,7 +42,7 @@
 
 namespace shmsync {
 
-// MutexBase has no members, it just encapsulates the atomic operations and
+// MutexBase has no attributes, it just encapsulates the atomic operations and
 // futex calls that we need, in static methods.
 class MutexBase {
   public:
@@ -99,7 +99,7 @@ class Mutex: public MutexBase {
     };
 
   public:
-    Mutex() { Store(&state, (uint32_t) 0); }
+    Mutex() { Store(&state, (uint32_t) FREE); }
 
     void Lock() {
       uint32_t k = CompareExchange(&state, FREE, LOCKED_NO_WAITERS);
@@ -119,7 +119,7 @@ class Mutex: public MutexBase {
     volatile uint32_t state;
 };
 
-// RTTI class to acquire/release locks on Mutex.
+// RAII class to acquire/release locks on Mutex.
 class Lock {
   public:
     explicit Lock(Mutex *f): wrapped_mutex(f) { f->Lock(); }
@@ -146,7 +146,6 @@ class SharedMutex: public MutexBase {
       WAITERS = 1 << 2,  // some workers are waiting until the lock is released
     };
 
-    // 0, BLOCK, BLOCK | BLOCKED_READERS
     // Flags whose combinations describe whether workers trying to acquire a
     // shared lock should be blocked early to give way to exclusive lockers.
     // Note this blocking mechanism isn't the authoritative thing we use to
@@ -244,7 +243,7 @@ class SharedMutex: public MutexBase {
     volatile uint32_t state;
 };
 
-// RTTI class to acquire/release an exclusive lock on SharedMutex.
+// RAII class to acquire/release an exclusive lock on SharedMutex.
 class ExclusiveLock {
   public:
     explicit ExclusiveLock(SharedMutex* sm): wrapped_mutex(sm) { sm->LockExclusive(); }
@@ -255,7 +254,7 @@ class ExclusiveLock {
     SharedMutex* const wrapped_mutex;
 };
 
-// RTTI class to acquire/release a shared lock on SharedMutex.
+// RAII class to acquire/release a shared lock on SharedMutex.
 class SharedLock {
   public:
     explicit SharedLock(SharedMutex* sm): wrapped_mutex(sm) { sm->LockShared(); }

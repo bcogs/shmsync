@@ -103,7 +103,7 @@ static void InstallSignalHandler(int signum, volatile const void* state_, size_t
 
 #define MUST(err) if (!err.empty()) FATAL(err);
 
-template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFrom2ConcurrentProcesses(uint8_t* shm) {
+template<class MutexClass, class RAIILockClass> std::string TestExclusiveLocksFrom2ConcurrentProcesses(uint8_t* shm) {
   if (shm == NULL) FATAL("shm is NULL");
   MutexClass* const mutex = new(shm) MutexClass;
   InstallSignalHandler(SIGALRM, mutex, sizeof(*mutex));
@@ -115,10 +115,10 @@ template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFr
       if (k % 3 == 0) usleep(1000);
       if (pid <= 0) FATAL("pid " << pid << " " << strerror(errno));
       MUST(WaitForChildren(1));
-      RTTILockClass lock(mutex);
+      RAIILockClass lock(mutex);
     } else {  // child
       if (k % 2 == 0) usleep(1000);
-      do { RTTILockClass lock(mutex); } while (false);
+      do { RAIILockClass lock(mutex); } while (false);
       _exit(0);
     }
   }
@@ -152,7 +152,7 @@ template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFr
     const pid_t pid = Fork("child");
     if (pid) {  // parent
       if (pid <= 0) FATAL("pid " << pid << " " << strerror(errno));
-      RTTILockClass lock(mutex);
+      RAIILockClass lock(mutex);
       const int value = *i;
       if (value != 1) FATAL("*i = " << value);
       MUST(WaitForChildren(1));
@@ -168,7 +168,7 @@ template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFr
   return "";
 }
 
-template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFromManyConcurrentProcesses(uint8_t* shm) {
+template<class MutexClass, class RAIILockClass> std::string TestExclusiveLocksFromManyConcurrentProcesses(uint8_t* shm) {
   if (shm == NULL) FATAL("shm is NULL");
   volatile long* const i = (long*) shm;
   MutexClass* const mutex = new((void*) (i + 1)) MutexClass;
@@ -183,7 +183,7 @@ template<class MutexClass, class RTTILockClass> std::string TestExclusiveLocksFr
     if (!pid) { // child
       long previous_i = 0;
       for (long k2 = 0; k2 < increments_per_child; ++k2) {
-        RTTILockClass lock(mutex);
+        RAIILockClass lock(mutex);
         const long new_i = 1 + *i;
         *i = new_i;
         if (new_i > previous_i) {
