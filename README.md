@@ -29,7 +29,7 @@ int main() {
       m->Unlock();
       return 0;
   }
-  shmsync::Lock lock(mutex);  // or you can use RTTI to avoid mistakes
+  shmsync::Lock lock(mutex);  // or you can use RAII to avoid mistakes
   std::cout << "the parent acquired the lock" << std::endl;
   return 0;
 }
