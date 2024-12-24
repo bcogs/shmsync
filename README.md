@@ -1,6 +1,6 @@
 # Overview
 
-shmsync is a C++ 11 library that provides synchronization primitives such as mutexes that work beyond threads, for example, across processes, as long as they're stored in a memory area shared between those processes (usually allocated with mmap or with system V shared memory).
+`shmsync` is a C++ 14 library that provides synchronization primitives such as mutexes that work beyond threads, for example, across processes, as long as they're stored in a memory area shared between those processes (usually allocated with mmap or with system V shared memory).
 
 Look in the .h files for the documentation of the public API.
 You'll need to explicitly control where the shmsync objects are placed in memory, which you can do using C++ 11 *placement new*, eg. `new (the address) shmsync::Mutex`.
@@ -10,6 +10,7 @@ You'll need to explicitly control where the shmsync objects are placed in memory
 
 ```
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -19,10 +20,10 @@ You'll need to explicitly control where the shmsync objects are placed in memory
 
 int main() {
   void* p = ::mmap(0, getpagesize(), PROT_READ|PROT_WRITE, MAP_ANON|MAP_SHARED, -1, 0);
-  if (p == MAP_FAILED) abort();
+  if (p == MAP_FAILED) { perror("mmap"); abort(); }
   shmsync::Mutex* const mutex = new (p) shmsync::Mutex;
   switch (fork()) {
-    case -1: abort();
+    case -1: perror("fork"); abort();
     case 0:
       m->Lock();  // you can lock/unlock the mutex explicitly...
       std::cout << "the child acquired the lock" << std::endl;
@@ -40,7 +41,7 @@ int main() {
 
 To run the unit tests, you'll need Google test.  Here's how to install it on Ubuntu:
 ```
-apt-get install cmake googletest-dev
+apt-get install cmake googletest
 cd /usr/src/googletest
 cmake CMakeLists.txt
 make
