@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <utility>
@@ -14,7 +15,7 @@
 #include "futex.h"
 #include "test_util.h"
 
-using namespace shmsync;
+using namespace metrillions;
 
 const char* process_name = "parent";
 static volatile const void* state;
@@ -23,6 +24,10 @@ static volatile const void* state2;
 static size_t state2_size;
 
 constexpr static int ttl = 10;
+
+inline bool FutexSyscallFails(volatile uint32_t* addr, int futex_op, uint32_t val) {
+  return FutexSyscall(addr, futex_op, val) == -1 && errno != EAGAIN && errno != ETIMEDOUT;
+}
 
 inline pid_t Fork(const char* child_name) {
   const pid_t pid = fork();
@@ -99,9 +104,71 @@ static void InstallSignalHandler(int signum, volatile const void* state_, size_t
   signal(signum, HandleSignal);
 }
 
-#define FATAL(x) return (std::stringstream() << "in " << __FUNCTION__ << " at line " << __LINE__ << ": " << x).str();
+#define FATAL(x) return (EZStr() << "in " << __FUNCTION__ << " at line " << __LINE__ << ": " << x).Get()
 
 #define MUST(err) if (!err.empty()) FATAL(err);
+
+static int fds[2];
+static void HandleSIGUSR2(int) {
+  close(fds[1]);
+}
+
+template<class MutexClass> std::string TestSignalCanBeDeliveredUnderExclusiveLock(uint8_t* shm) {
+  if (shm == NULL) FATAL("shm is NULL");
+  if (pipe(fds) != 0) FATAL("pipe failed - " << strerror(errno));
+  MutexClass* const mutex = new(shm) MutexClass;
+  InstallSignalHandler(SIGALRM, mutex, sizeof(*mutex));
+  alarm(ttl);
+  mutex->Lock();
+  const pid_t pid = Fork("child");
+  if (pid == 0) {  // child
+    close(fds[0]);
+    signal(SIGUSR2, HandleSIGUSR2);
+    mutex->Lock();
+    mutex->Unlock();
+    _exit(0);
+  }
+  // parent
+  close(fds[1]);
+  std::string err;
+  // wait until the child is stuck in FUTEX_WAIT
+  const std::string filename = (EZStr() << "/proc/" << pid << "/wchan").Get();
+  FILE* const f = fopen(filename.c_str(), "r");
+  if (f != NULL) {
+    char wchan[256];
+    do {
+      if (fgets(wchan, sizeof(wchan), f) == NULL) {
+        err = (EZStr() << "reading " << filename << " failed - " << strerror(errno)).Get();
+	break;
+      }
+      if (fseek(f, 0, SEEK_SET) != 0) {
+        err = (EZStr() << "fseek on " << filename << " failed - " << strerror(errno)).Get();
+	break;
+      }
+    } while (strstr(wchan, "futex_wait") == NULL);
+    if (err.empty()) {
+      // the child's in FUTEX_WAIT
+      if (kill(pid, SIGUSR2) == 0) {
+        char c;
+	// wait until the signal handler of the child closes the pipe
+	if (read(fds[0], &c, 1) < 0) {
+          err = (EZStr() << "reading pipe failed - " << strerror(errno)).Get();
+	  kill(SIGKILL, pid);
+        }
+	mutex->Unlock();
+	const std::string err2 = WaitForChildren(1);
+	if (err.empty()) err = err2;
+      } else {
+        err = (EZStr() << "sending SIGUSR2 to child pid failed - " << strerror(errno)).Get();
+      }
+    }
+    fclose(f);
+  } else {
+    err = (EZStr() << "opening " << filename << " failed - " << strerror(errno)).Get();
+  }
+  close(fds[0]);
+  return err;
+}
 
 template<class MutexClass, class RAIILockClass> std::string TestExclusiveLocksFrom2ConcurrentProcesses(uint8_t* shm) {
   if (shm == NULL) FATAL("shm is NULL");
@@ -233,7 +300,7 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
     if (!pid) { // child
       for (long step = 0; step < increments_per_shared; ++step) {
         while (__atomic_load_n(&x->step, __ATOMIC_SEQ_CST) <= step) {
-          if (!FutexSyscall(&x->step, FUTEX_WAIT, step)) _exit(61);
+          if (FutexSyscallFails(&x->step, FUTEX_WAIT, step)) _exit(61);
         }
         DEBUG("shared end of futex wait &x->step " << step);
         SharedLock lock(&x->sm);
@@ -243,7 +310,7 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
           __atomic_store_n(&x->shared_done, 1, __ATOMIC_SEQ_CST);
           DEBUG("shared_done = 1");
           DEBUG("futex wake &x->shared_done");
-          if (!FutexSyscall(&x->shared_done, FUTEX_WAKE, 1)) _exit(62);
+          if (FutexSyscallFails(&x->shared_done, FUTEX_WAKE, 1)) _exit(62);
         }
       }
       _exit(0);
@@ -257,7 +324,7 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
     if (pid < 0) FATAL("pid " << pid << " " << strerror(errno));
       for (long step = 0; step < increments_per_shared; ++step) {
         while (__atomic_load_n(&x->step, __ATOMIC_SEQ_CST) <= step) {
-          if (!FutexSyscall(&x->step, FUTEX_WAIT, step)) _exit(63);
+          if (FutexSyscallFails(&x->step, FUTEX_WAIT, step)) _exit(63);
         }
         DEBUG("exclusive end of futex wait &x->step " << step);
         ExclusiveLock lock(&x->sm);
@@ -267,7 +334,7 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
           __atomic_store_n(&x->excl_done, 1, __ATOMIC_SEQ_CST);
           DEBUG("excl_done = 1");
           DEBUG("futex wake &x->excl_done");
-          if (!FutexSyscall(&x->excl_done, FUTEX_WAKE, 1)) _exit(64);
+          if (FutexSyscallFails(&x->excl_done, FUTEX_WAKE, 1)) _exit(64);
         }
       }
       _exit(0);
@@ -279,13 +346,13 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
     __atomic_store_n(&x->step, step, __ATOMIC_SEQ_CST);
     DEBUG("============== step = " << step);
     DEBUG("futex wake &x->step");
-    if (!FutexSyscall(&x->step, FUTEX_WAKE, nexcl + nshared)) FATAL("futex wake failed: " << strerror(errno));
+    if (FutexSyscallFails(&x->step, FUTEX_WAKE, nexcl + nshared)) FATAL("futex wake failed: " << strerror(errno));
     while (__atomic_load_n(&x->shared_done, __ATOMIC_SEQ_CST) == 0) {
-      if (!FutexSyscall(&x->shared_done, FUTEX_WAIT, 0)) FATAL("futex wait failed: " << strerror(errno));
+      if (FutexSyscallFails(&x->shared_done, FUTEX_WAIT, 0)) FATAL("futex wait failed: " << strerror(errno));
     }
     DEBUG("end of futex wait &x->shared_done");
     while (__atomic_load_n(&x->excl_done, __ATOMIC_SEQ_CST) == 0) {
-      if (!FutexSyscall(&x->excl_done, FUTEX_WAIT, 0)) FATAL("futex wait failed: " << strerror(errno));
+      if (FutexSyscallFails(&x->excl_done, FUTEX_WAIT, 0)) FATAL("futex wait failed: " << strerror(errno));
     }
     DEBUG("end of futex wait &x->excl_done");
     if (nshared != 0) __atomic_store_n(&x->shared_done, 0, __ATOMIC_SEQ_CST);
@@ -298,14 +365,19 @@ std::string TestSharedLocksFromManyConcurrentProcesses(uint8_t* shm, long nexcl,
 
 class TestMutex : public testing::Test {
   public:
-    TestMutex() { shm = (uint8_t*) mmap(getpagesize()); }
+    TestMutex() { shm = mmap(getpagesize(), -1); }
 
-    ~TestMutex() { munmap(shm, getpagesize()); }
+    ~TestMutex() { alarm(0); munmap(shm, getpagesize()); }
 
 
   protected:
     uint8_t* shm = NULL;
 };
+
+TEST_F(TestMutex, signal_can_be_delivered_under_exclusive_lock) {
+  const auto s(TestSignalCanBeDeliveredUnderExclusiveLock<Mutex>(shm));
+  ASSERT_EMPTYSTR(s);
+}
 
 TEST_F(TestMutex, locks_from_2_concurrent_processes) {
   const auto s(TestExclusiveLocksFrom2ConcurrentProcesses<Mutex, Lock>(shm));
@@ -318,6 +390,11 @@ TEST_F(TestMutex, locks_from_many_concurrent_processes) {
 }
 
 class TestSharedMutex : public TestMutex { };
+
+TEST_F(TestSharedMutex, signal_can_be_delivered_under_exclusive_lock) {
+  const auto s(TestSignalCanBeDeliveredUnderExclusiveLock<Mutex>(shm));
+  ASSERT_EMPTYSTR(s);
+}
 
 TEST_F(TestSharedMutex, exclusive_locks_from_2_concurrent_processes) {
   const auto s(TestExclusiveLocksFrom2ConcurrentProcesses<SharedMutexWrapper, ExclusiveLock>(shm));
